@@ -1,0 +1,364 @@
+#
+#
+#  _        _          _          _ _
+#  _ __ (_)_  _____| | ___  __| (_)
+# | '_ \| \ \/ / _ \ |/ _ \/ _` | |
+# | |_) | |>  <  __/ |  __/ (_| | |
+# | .__/|_/_/\_\___|_|\___|\__,_|_|
+# |_|
+# https://links.pixeledi.eu
+# CYD mit ESPHome | 05.2025
+#
+substitutions:
+  device_name: cyd 
+  friendly_name: cyd 
+
+esphome:
+  name: $device_name
+  friendly_name: $friendly_name
+  platformio_options:
+    upload_speed: 921600
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+# OTA-Update erm�glichen
+ota: # This enables Over-The-Air updates using the native ESPHome API
+  - platform: esphome
+    password: !secret ota_pass
+
+api:
+  encryption:
+    key: !secret api_key
+
+# WiFi Konfiguration (Optional)
+wifi:
+  # Liste der zu verwendenden WLAN-Netzwerke.
+  # ESPHome versucht, sich in der angegebenen Reihenfolge zu verbinden.
+  networks:
+    - ssid: !secret wifi_ssid_primary
+      password: !secret wifi_password_primary
+      # Optional: Geben Sie diesem Netzwerk eine h�here Priorit�t
+      priority: 2.0
+    - ssid: !secret wifi_ssid_secondary
+      password: !secret wifi_password_secondary
+      priority: 1.0
+
+  ap:  # Access Point Modus, falls kein WLAN verf�gbar ist
+    ssid: !secret ap_ssid
+    password: !secret ap_pass
+
+
+output:
+  - platform: ledc
+    pin: GPIO21
+    id: backlight_pwm
+  - platform: gpio
+    pin: GPIO4
+    id: gpio4_output
+
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: Display Backlight
+    id: local_light
+    restore_mode: ALWAYS_ON
+    # Details von GPIOs findet man auch unter :/home/deinuser/Arduino/libraries/TFT_eSPI/User_Setup.h 
+
+spi:
+  - id: tft
+    clk_pin: GPIO14
+    mosi_pin: GPIO13
+    miso_pin: GPIO12
+  - id: touch
+    clk_pin: GPIO25
+    mosi_pin: GPIO32
+    miso_pin: GPIO39
+
+font:
+  - file: "fonts/arial.ttf"
+    id: font_value_large
+    size: 28
+  - file: "fonts/arial.ttf"
+    id: font_value_caption
+    size: 18
+  - file: "fonts/arial.ttf"
+    id: font_mdi
+    size: 42
+
+touchscreen:
+  - platform: xpt2046
+    id: my_touch
+    spi_id: touch
+    cs_pin: GPIO33
+    interrupt_pin: GPIO36
+    
+    calibration:
+      x_min: 200
+      x_max: 3900
+      y_min: 200
+      y_max: 3900   
+    transform:
+      swap_xy: true
+      mirror_x: false
+      mirror_y: false
+
+button:
+  - platform: template
+    name: "Button 1"
+    id: ha_btn_1
+    on_press:
+      - logger.log: "Button 1 gedrückt"
+  - platform: template
+    name: "Button 2"
+    id: ha_btn_2
+    on_press:
+      - logger.log: "Button 2 gedrückt"
+  - platform: template
+    name: "Button 3"
+    id: ha_btn_3
+    on_press:
+      - logger.log: "Button 3 gedrückt"
+
+binary_sensor:
+  - platform: template
+    name: "BTN1 State"
+    id: bs_btn1
+    device_class: connectivity
+  - platform: template
+    name: "BTN2 State"
+    id: bs_btn2
+    device_class: connectivity
+  - platform: template
+    name: "BTN3 State"
+    id: bs_btn3
+    device_class: connectivity
+
+
+sensor:
+  # Werte aus Home Assistant ziehen; ersetze entity_id durch deine Sensoren
+  - platform: homeassistant
+    id: ha_int1
+    entity_id: sensor.esp32beweg_helligkeitssensor
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_val_1
+            text: !lambda |-
+              char buf[16];
+              snprintf(buf, sizeof(buf), "%.2f V", x);
+              return std::string(buf);
+  - platform: homeassistant
+    id: ha_temp2
+    entity_id: number.esp32beweg_helligkeitsschwelle_v
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_val_2
+            text: !lambda |-
+              char buf[16];
+              snprintf(buf, sizeof(buf), "%.1f V", x);
+              return buf;
+  - platform: homeassistant
+    id: ha_temp3
+    entity_id: sensor.temp3   # <--- anpassen: HA-Entity für Temp 3
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_val_3
+            text: !lambda |-
+              char buf[16];
+              snprintf(buf, sizeof(buf), "%.1f °C", x);
+              return buf;
+
+lvgl:
+  buffer_size: 25%
+  touchscreens:
+    - touchscreen_id: my_touch
+      long_press_time: 400ms
+      long_press_repeat_time: 100ms
+  style_definitions:
+    - id: style_room_page
+      bg_color: 0x000000
+      bg_opa: "100%"
+    - id: style_btn_blue
+      bg_color: 0x4919e2
+      radius: 8
+    - id: style_btn_red
+      bg_color: 0xCC0000
+      radius: 8
+    - id: style_btn_green
+      bg_color: 0x00FF00
+      radius: 8
+    - id: style_value_white
+      text_color: 0xFFFFFF
+      text_align: CENTER
+      text_font: font_value_large
+    - id: style_value_caption
+      text_color: 0xFFFFFF
+      text_align: CENTER
+      text_font: font_value_caption
+  
+  
+  pages:
+    - id: room_page
+      styles: style_room_page
+      widgets:
+        # drei Werte mit Beschriftung
+        - label:
+            id: lbl_cap_1
+            align: TOP_MID
+            x: -105
+            y: 0
+            width: 90
+            height: 16
+            styles: style_value_caption
+            text: "Helligkeit"
+        - label:
+            id: lbl_val_1
+            align: TOP_MID
+            x: -105
+            y: 16
+            width: 90
+            height: 50
+            styles: style_value_white
+            text: "--"
+        - label:
+            id: lbl_cap_2
+            align: TOP_MID
+            x: 0
+            y: 0
+            width: 90
+            height: 16
+            styles: style_value_caption
+            text: "Voltage"
+        - label:
+            id: lbl_val_2
+            align: TOP_MID
+            x: 0
+            y: 16
+            width: 90
+            height: 50
+            styles: style_value_white
+            text: " °C"
+        - label:
+            id: lbl_cap_3
+            align: TOP_MID
+            x: 105
+            y: 0
+            width: 90
+            height: 16
+            styles: style_value_caption
+            text: "Aussentemp"
+        - label:
+            id: lbl_val_3
+            align: TOP_MID
+            x: 105
+            y: 16
+            width: 90
+            height: 50
+            styles: style_value_white
+            text: "-- °C"
+        # drei Bedien-Buttons unten
+        - button:
+            id: btn_1
+            align: BOTTOM_MID
+            x: -105
+            y: -10
+            width: 90
+            height: 60
+            checkable: true
+            styles:
+              - style_btn_red
+              - style_btn_blue
+            widgets:
+              - label:
+                  id: lbl_btn_1
+                  align: CENTER
+                  text: "Aus"
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: 'return x;'
+                    then:
+                      - lvgl.label.update: { id: lbl_btn_1, text: "An" }
+                      - binary_sensor.template.publish: { id: bs_btn1, state: true }
+                      - lvgl.widget.update: { id: btn_1, state: { checked: true } }
+                    else:
+                      - lvgl.label.update: { id: lbl_btn_1, text: "Aus" }
+                      - binary_sensor.template.publish: { id: bs_btn1, state: false }
+                      - lvgl.widget.update: { id: btn_1, state: { checked: false } }
+        - button:
+            id: btn_2
+            align: BOTTOM_MID
+            x: 0
+            y: -10
+            width: 90
+            height: 60
+            checkable: true
+            styles:
+              - style_btn_red
+              - style_btn_blue
+            widgets:
+              - label:
+                  id: lbl_btn_2
+                  align: CENTER
+                  text: "Aus"
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: 'return x;'
+                    then:
+                      - lvgl.label.update: { id: lbl_btn_2, text: "An" }
+                      - binary_sensor.template.publish: { id: bs_btn2, state: true }
+                    else:
+                      - lvgl.label.update: { id: lbl_btn_2, text: "Aus" }
+                      - binary_sensor.template.publish: { id: bs_btn2, state: false }
+        - button:
+            id: btn_3
+            align: BOTTOM_MID
+            x: 105
+            y: -10
+            width: 90
+            height: 60
+            checkable: true
+            styles:
+              - style_btn_red
+              - style_btn_green
+            widgets:
+              - label:
+                  id: lbl_btn_3
+                  align: CENTER
+                  text: "Aus"
+            on_value:
+              then:
+                - if:
+                    condition:
+                      lambda: 'return x;'
+                    then:
+                      - lvgl.label.update: { id: lbl_btn_3, text: "An" }
+                      - binary_sensor.template.publish: { id: bs_btn3, state: true }
+                    else:
+                      - lvgl.label.update: { id: lbl_btn_3, text: "Aus" }
+                      - binary_sensor.template.publish: { id: bs_btn3, state: false }
+       
+        
+# CYD = ili9xxx platform
+display:
+  - platform: ili9xxx
+    model: ili9341
+    spi_id: tft 
+    cs_pin: GPIO15
+    dc_pin: GPIO2
+    rotation: 90
+    invert_colors: false
+    #color_palette: 8BIT
+  
+   
