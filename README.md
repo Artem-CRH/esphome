@@ -5,6 +5,12 @@
  - `git init`
  - `git pull`
  - `git push`
+ - `git status`
+ - `git commit -m "init: initial README"`
+ - `git push`
+ - `git status`
+
+
 
 
 
