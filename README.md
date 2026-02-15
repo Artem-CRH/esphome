@@ -1,5 +1,14 @@
 # Git Bash Spickzettel
 
+## datei hinzufügen
+ - `git add README.md `   
+ - `git init`
+ - `git pull`
+ - `git push`
+
+
+
+
 ## Häufige Befehle
 - `git status` — aktuellen Repo-Status anzeigen (Änderungen, Branch).
 - `git add <pfad>` — Dateien für den nächsten Commit vormerken.
