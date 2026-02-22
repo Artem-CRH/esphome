@@ -41,6 +41,22 @@ globals:
     type: bool
     restore_value: no
     initial_value: "false"
+  - id: wasser_fehlt
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: monitor_min_cm
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: monitor_max_cm
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+  - id: monitor_ticks
+    type: int
+    restore_value: no
+    initial_value: "0"
 
 output:
   - platform: gpio
@@ -60,7 +76,10 @@ switch:
     name: "Wassernachfühlanlage"
     output: button_led_out
     on_turn_on:
-      - lambda: "id(anlage_aktiv) = true;"
+      - lambda: |-
+          id(anlage_aktiv) = true;
+          id(wasser_fehlt) = false;
+          id(monitor_ticks) = 0;
       - logger.log: "Anlage aktiviert"
     on_turn_off:
       - lambda: |-
@@ -100,6 +119,10 @@ binary_sensor:
     id: pumpe_status
     name: "Pumpe Laeuft"
     lambda: "return id(pumpe_laeuft);"
+  - platform: template
+    id: wasser_fehlt_status
+    name: "Stoerung Kein Wasser"
+    lambda: "return id(wasser_fehlt);"
 
 sensor:
   - platform: ultrasonic
@@ -173,6 +196,44 @@ interval:
           then:
             - output.turn_off: pumpe_pwm_out
             - lambda: "id(pumpe_laeuft) = false;"
+      - if:
+          condition:
+            lambda: "return !id(pumpe_laeuft);"
+          then:
+            - lambda: |-
+                id(monitor_ticks) = 0;
+      - if:
+          condition:
+            lambda: "return id(pumpe_laeuft) && id(abstand_wasserstand).has_state();"
+          then:
+            - lambda: |-
+                const float current = id(abstand_wasserstand).state;
+                const int window_ticks = 30;      // 30 * 500ms = 15s
+                const float min_span_cm = 1.0f;   // Mindestveraenderung im Fenster
+
+                if (id(monitor_ticks) == 0) {
+                  id(monitor_min_cm) = current;
+                  id(monitor_max_cm) = current;
+                } else {
+                  if (current < id(monitor_min_cm)) id(monitor_min_cm) = current;
+                  if (current > id(monitor_max_cm)) id(monitor_max_cm) = current;
+                }
+                id(monitor_ticks) += 1;
+
+                if (id(monitor_ticks) >= window_ticks) {
+                  const float span = id(monitor_max_cm) - id(monitor_min_cm);
+                  if (span < min_span_cm && !id(wasser_fehlt)) {
+                    id(wasser_fehlt) = true;
+                    ESP_LOGW("main", "Stoerung: kein Wasserfluss erkannt (Span %.2f cm in 15s)", span);
+                  }
+                  id(monitor_ticks) = 0;
+                }
+      - if:
+          condition:
+            lambda: "return id(anlage_aktiv) && id(wasser_fehlt);"
+          then:
+            - switch.turn_off: button_led_switch
+            - logger.log: "Stoerung aktiv: Anlage wurde ausgeschaltet"
       - if:
           condition:
             lambda: "return !id(anlage_aktiv) && id(ozon_switch).state;"
