@@ -1,0 +1,206 @@
+﻿esphome:
+  name: kaffee-nachfuellung
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: seeed_xiao_esp32c3
+  variant: esp32c3
+  framework:
+    type: arduino
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid_primary
+      password: !secret wifi_password_primary
+      priority: 2.0
+    - ssid: !secret wifi_ssid_secondary
+      password: !secret wifi_password_secondary
+      priority: 1.0
+  ap:
+    ssid: !secret ap_ssid
+    password: !secret ap_pass
+
+logger:
+  hardware_uart: UART0
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_pass
+
+globals:
+  - id: anlage_aktiv
+    type: bool
+    restore_value: yes
+    initial_value: "false"
+  - id: pumpe_laeuft
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+output:
+  - platform: gpio
+    id: button_led_out
+    pin: GPIO21
+  - platform: ledc
+    id: pumpe_pwm_out
+    pin: GPIO5
+    frequency: 1000 Hz
+  - platform: gpio
+    id: ozon_out
+    pin: GPIO4
+
+switch:
+  - platform: output
+    id: button_led_switch
+    name: "Wassernachfühlanlage"
+    output: button_led_out
+    on_turn_on:
+      - lambda: "id(anlage_aktiv) = true;"
+      - logger.log: "Anlage aktiviert"
+    on_turn_off:
+      - lambda: |-
+          id(anlage_aktiv) = false;
+          id(pumpe_laeuft) = false;
+      - output.turn_off: pumpe_pwm_out
+      - switch.turn_off: ozon_switch
+      - logger.log: "Anlage deaktiviert"
+  - platform: output
+    id: ozon_switch
+    name: "Ozongenerator"
+    output: ozon_out
+    on_turn_on:
+      - if:
+          condition:
+            lambda: "return !id(anlage_aktiv);"
+          then:
+            - switch.turn_off: ozon_switch
+            - logger.log: "Ozon blockiert: Anlage ist AUS"
+
+binary_sensor:
+  - platform: gpio
+    id: taste_gpio10
+    name: "Taster GPIO10"
+    pin:
+      number: GPIO10
+      mode: INPUT_PULLUP
+      inverted: true
+    on_press:
+      - logger.log: "Taster GPIO10 gedrueckt"
+      - switch.toggle: button_led_switch
+  - platform: template
+    id: anlage_status
+    name: "Anlage Aktiv"
+    lambda: "return id(anlage_aktiv);"
+  - platform: template
+    id: pumpe_status
+    name: "Pumpe Laeuft"
+    lambda: "return id(pumpe_laeuft);"
+
+sensor:
+  - platform: ultrasonic
+    id: abstand_wasserstand
+    name: "Abstand Wasserstand"
+    trigger_pin: GPIO2
+    echo_pin: GPIO3
+    update_interval: 500ms
+    timeout: 4m
+    unit_of_measurement: "cm"
+    accuracy_decimals: 1
+    filters:
+      - multiply: 100.0
+    on_value:
+      then:
+        - logger.log:
+            level: INFO
+            format: "Abstand: %.1f cm"
+            args: ["x"]
+number:
+  - platform: template
+    id: pumpe_pwm_soll
+    name: "Pumpe PWM Soll"
+    min_value: 1
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    restore_value: true
+    optimistic: true
+    initial_value: 60
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: "return id(anlage_aktiv) && id(pumpe_laeuft);"
+            then:
+              - output.set_level:
+                  id: pumpe_pwm_out
+                  level: !lambda "return id(pumpe_pwm_soll).state / 100.0f;"
+              - logger.log:
+                  format: "PWM live uebernommen: %.0f %%"
+                  args:
+                    - "id(pumpe_pwm_soll).state"
+  - platform: template
+    id: abstand_min_cm
+    name: "Abstand Min"
+    min_value: 1
+    max_value: 200
+    step: 0.5
+    unit_of_measurement: "cm"
+    restore_value: true
+    optimistic: true
+    initial_value: 8
+  - platform: template
+    id: abstand_max_cm
+    name: "Abstand Max"
+    min_value: 1
+    max_value: 200
+    step: 0.5
+    unit_of_measurement: "cm"
+    restore_value: true
+    optimistic: true
+    initial_value: 20
+
+interval:
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            lambda: "return !id(anlage_aktiv) && id(pumpe_laeuft);"
+          then:
+            - output.turn_off: pumpe_pwm_out
+            - lambda: "id(pumpe_laeuft) = false;"
+      - if:
+          condition:
+            lambda: "return !id(anlage_aktiv) && id(ozon_switch).state;"
+          then:
+            - switch.turn_off: ozon_switch
+            - logger.log: "Ozon AUS erzwungen (Anlage AUS)"
+      - if:
+          condition:
+            lambda: "return id(anlage_aktiv) && id(abstand_wasserstand).has_state() && !id(pumpe_laeuft) && id(abstand_wasserstand).state >= id(abstand_max_cm).state;"
+          then:
+            - output.set_level:
+                id: pumpe_pwm_out
+                level: !lambda "return id(pumpe_pwm_soll).state / 100.0f;"
+            - lambda: "id(pumpe_laeuft) = true;"
+            - logger.log:
+                format: "Pumpe EIN | Abstand %.1f cm >= Max %.1f cm | PWM %.0f %%"
+                args:
+                  - "id(abstand_wasserstand).state"
+                  - "id(abstand_max_cm).state"
+                  - "id(pumpe_pwm_soll).state"
+      - if:
+          condition:
+            lambda: "return id(pumpe_laeuft) && id(abstand_wasserstand).has_state() && id(abstand_wasserstand).state <= id(abstand_min_cm).state;"
+          then:
+            - output.turn_off: pumpe_pwm_out
+            - lambda: "id(pumpe_laeuft) = false;"
+            - logger.log:
+                format: "Pumpe AUS | Abstand %.1f cm <= Min %.1f cm"
+                args:
+                  - "id(abstand_wasserstand).state"
+                  - "id(abstand_min_cm).state"
